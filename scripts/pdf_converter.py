@@ -17,6 +17,7 @@ Scanned pages are also written to qa/scanned_pages.csv.
 
 import csv
 import os
+import re
 import traceback
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,50 @@ def _log_scanned_page(file_id: str, page_num: int, cid_word_pct: float) -> None:
 # The turn_segmenter uses it to detect turn boundaries.
 BOLD_LINE_PREFIX = "§"
 
+# CID decoding — applies chr(cid + 29) offset confirmed for the dominant 2007-2017
+# font subset used in this corpus.  Known exceptions override the offset for
+# accented characters that fall outside the +29 ASCII mapping.
+_CID_RE = re.compile(r"\(cid:(\d+)\)")
+
+# Accented characters whose +29 result lands in the C1 control range (128-159)
+# and cannot be detected via isalpha().  Verified against calibration files.
+_CID_CHAR_MAP: dict[int, str] = {
+    105: "á",
+    112: "é",
+    116: "í",
+    120: "ñ",
+    121: "ó",
+    126: "ú",
+}
+
+# Punctuation allowed from the +29 offset.  Chosen to cover attribution endings
+# (colon), role-description commas, and name hyphens — while excluding the
+# digit and symbol range that appears in gaceta_107's incompatible encoding.
+_CID_ALLOWED_PUNCT = set(",.:-")
+
+
+def _decode_cid_text(text: str) -> str:
+    """Decode CID tokens using the +29 offset with known exceptions.
+
+    Substitutes only when the decoded character is alphabetic, whitespace, or
+    common attribution punctuation.  This rejects encodings like gaceta_107
+    where the same CID values decode to digits or symbols under +29, leaving
+    those tokens as (cid:N) for the segmenter to handle.
+    """
+    if "(cid:" not in text:
+        return text
+
+    def _replace(m: re.Match) -> str:
+        n = int(m.group(1))
+        if n in _CID_CHAR_MAP:
+            return _CID_CHAR_MAP[n]
+        ch = chr(n + 29)
+        if ch.isalpha() or ch.isspace() or ch in _CID_ALLOWED_PUNCT:
+            return ch
+        return m.group(0)
+
+    return _CID_RE.sub(_replace, text)
+
 
 def _is_bold_word(word: dict) -> bool:
     return "bold" in (word.get("fontname") or "").lower()
@@ -107,7 +152,7 @@ def _words_to_text_with_bold(words: list[dict]) -> str:
     lines = _group_into_lines(words)
     text_lines: list[str] = []
     for line_words in lines:
-        line_text = " ".join(w.get("text", "") for w in line_words)
+        line_text = " ".join(_decode_cid_text(w.get("text", "")) for w in line_words)
         if line_text.strip() and all(_is_bold_word(w) for w in line_words):
             text_lines.append(BOLD_LINE_PREFIX + line_text)
         else:

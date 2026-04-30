@@ -305,20 +305,23 @@ _CID_LINE_RE = re.compile(r"(?m)^[^\n]*(?:\(cid:\d+\)){10,}[^\n]*$")
 # Threshold of 8 tokens: lines with fewer residual CIDs are decoded instead (see _decode_cid_in_attribution).
 _CID_BOLD_LINE_RE = re.compile(r"(?m)^§[^\n]*(?:\(cid:\d+\)){3,}[^\n]*$")
 
-# Known CID → character mappings for accented characters that fall outside the +29 ASCII offset.
-# Confirmed in gaceta_88(6): (cid:112) = é.
-_CID_CHAR_MAP = {112: "é"}
+# Sync with pdf_converter._CID_CHAR_MAP — accented chars whose +29 result is a C1 control.
+_CID_CHAR_MAP = {105: "á", 112: "é", 116: "í", 120: "ñ", 121: "ó", 126: "ú"}
+_CID_ALLOWED_PUNCT = set(",.:-")
 
 
 def _decode_cid_in_attribution(text: str) -> str:
-    """Decode residual CID tokens in an attribution string using the +29 ASCII offset
-    and known exceptions in _CID_CHAR_MAP. Unknown CID values are left as-is."""
+    """Decode residual CID tokens using the same rules as pdf_converter._decode_cid_text.
+
+    Uses the strict isalpha/isspace/punctuation filter so that gaceta_107-style
+    small-CID encodings are left as (cid:N) rather than decoded as symbols.
+    """
     def _replace(m: re.Match) -> str:
         n = int(m.group(1))
         if n in _CID_CHAR_MAP:
             return _CID_CHAR_MAP[n]
         ch = chr(n + 29)
-        if ch.isprintable() and not ch.isdigit():
+        if ch.isalpha() or ch.isspace() or ch in _CID_ALLOWED_PUNCT:
             return ch
         return m.group(0)
     return re.sub(r"\(cid:(\d+)\)", _replace, text)
